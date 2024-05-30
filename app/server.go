@@ -162,10 +162,11 @@ func connect(l net.Listener) error {
 	}
 }
 
-func startServer() error {
-	l, err := net.Listen("tcp", "0.0.0.0:6379")
+func startServer(port int) error {
+
+	l, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(port))
 	if err != nil {
-		fmt.Println("Failed to bind to port 6379")
+		fmt.Println("Failed to bind to port", strconv.Itoa(port))
 		return err
 	}
 	defer func() error {
@@ -178,8 +179,32 @@ func startServer() error {
 	return connect(l)
 }
 
+func parseArgs() map[string]string {
+	args := make(map[string]string)
+	if len(os.Args[1:]) == 0 {
+		return args
+	}
+	for i := 1; i < len(os.Args); {
+		arg := os.Args[i]
+		switch arg {
+		case "--port":
+			if i+1 < len(os.Args) {
+				args[arg] = os.Args[i+1]
+			}
+		default:
+			fmt.Println("Error: unknown command line parameter")
+		}
+	}
+	return args
+}
+
 func main() {
-	if startServer() != nil {
+	args := parseArgs()
+	port, _ := strconv.Atoi(args["--port"])
+	if args["--port"] == "" {
+		port = 6379
+	}
+	if startServer(port) != nil {
 		os.Exit(1)
 	}
 }
