@@ -191,6 +191,7 @@ func parseArgs() map[string]string {
 			if i+1 < len(os.Args) {
 				args[arg] = os.Args[i+1]
 			}
+			i += 2
 		default:
 			fmt.Println("Error: unknown command line parameter")
 		}
