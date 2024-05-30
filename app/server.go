@@ -16,15 +16,35 @@ const (
 	BULK_STRING = '$'
 )
 
-var db = make(map[string]string)
-var expiry = make(map[string]time.Time)
-var hasExpiry = make(map[string]bool)
+type Server struct {
+	port      int
+	db        map[string]string
+	expiry    map[string]time.Time
+	hasExpiry map[string]bool
+	isMaster  bool
+	// master    *Server
+}
 
-func INFO_REPL(conn net.Conn) {
-	_, err := conn.Write([]byte("$11\r\nrole:master\r\n"))
+func writeFields(conn net.Conn, fields map[string]string) {
+	var output string
+	for key, val := range fields {
+		body := key + ":" + val
+		output += fmt.Sprintf("$%d\r\n%s\r\n", len(body), body)
+	}
+	_, err := conn.Write([]byte(output))
 	if err != nil {
 		fmt.Println("Error writing to connection: ", err.Error())
 	}
+}
+
+func INFO_REPL(conn net.Conn, server *Server) {
+	info := make(map[string]string)
+	if server.isMaster {
+		info["role"] = "master"
+	} else {
+		info["role"] = "slave"
+	}
+	writeFields(conn, info)
 }
 
 func PING(conn net.Conn) {
@@ -42,20 +62,20 @@ func ECHO(conn net.Conn, argLen int, arg string) {
 	}
 }
 
-func SET(conn net.Conn, key, value string) {
-	db[key] = value
-	hasExpiry[key] = false
+func SET(conn net.Conn, key, value string, server *Server) {
+	server.db[key] = value
+	server.hasExpiry[key] = false
 	_, err := conn.Write([]byte("+OK\r\n"))
 	if err != nil {
 		fmt.Println("Error writing to connection: ", err.Error())
 	}
 }
 
-func SETPX(conn net.Conn, key, value string, ms int, requestTime time.Time) {
-	db[key] = value
-	hasExpiry[key] = true
+func SETPX(conn net.Conn, key, value string, ms int, requestTime time.Time, server *Server) {
+	server.db[key] = value
+	server.hasExpiry[key] = true
 	expireTime := requestTime.Add(time.Duration(ms * int(time.Millisecond)))
-	expiry[key] = expireTime
+	server.expiry[key] = expireTime
 	_, err := conn.Write([]byte("+OK\r\n"))
 	if err != nil {
 		fmt.Println("Error writing to connection: ", err.Error())
@@ -63,14 +83,14 @@ func SETPX(conn net.Conn, key, value string, ms int, requestTime time.Time) {
 }
 
 // what happens after expiration? delete?
-func GET(conn net.Conn, key string, requestTime time.Time) {
-	if hasExpiry[key] && time.Now().Compare(expiry[key]) > 0 {
+func GET(conn net.Conn, key string, requestTime time.Time, server *Server) {
+	if server.hasExpiry[key] && time.Now().Compare(server.expiry[key]) > 0 {
 		_, err := conn.Write([]byte("$-1\r\n"))
 		if err != nil {
 			fmt.Println("Error writing to connection: ", err.Error())
 		}
 	} else {
-		value := db[key]
+		value := server.db[key]
 		output := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
 		_, err := conn.Write([]byte(output))
 		if err != nil {
@@ -81,14 +101,14 @@ func GET(conn net.Conn, key string, requestTime time.Time) {
 
 // refactor this ugly piece of shit function for the love of god
 // add error handling for faulty inputs (e.g. index out of bounds)
-func handleRequest(conn net.Conn, fields []string, requestTime time.Time) error {
+func handleRequest(conn net.Conn, fields []string, requestTime time.Time, server *Server) error {
 	fmt.Println("Input:", fields) // debug
 	for i := 0; i < len(fields); {
 		field := fields[i]
 		switch rune(field[0]) /* first byte */ {
 		case ARRAY:
 			numElem, _ := strconv.Atoi(field[1:])
-			if err := handleRequest(conn, fields[i+1:2*numElem+i+1], requestTime); err != nil {
+			if err := handleRequest(conn, fields[i+1:2*numElem+i+1], requestTime, server); err != nil {
 				fmt.Println("Error parsing client request:", err.Error())
 				return err
 			}
@@ -108,20 +128,20 @@ func handleRequest(conn net.Conn, fields []string, requestTime time.Time) error 
 				value := fields[i+5]
 				if i+7 < len(fields) && strings.ToUpper(fields[i+7]) == "PX" {
 					time, _ := strconv.Atoi(fields[i+9])
-					SETPX(conn, key, value, time, requestTime)
+					SETPX(conn, key, value, time, requestTime, server)
 					i += 10
 				} else {
-					SET(conn, key, value)
+					SET(conn, key, value, server)
 					i += 6
 				}
 			case "GET":
 				key := fields[i+3]
-				GET(conn, key, requestTime)
+				GET(conn, key, requestTime, server)
 				i += 4
 			case "INFO":
 				infoType := fields[i+3]
 				if strings.ToLower(infoType) == "replication" {
-					INFO_REPL(conn)
+					INFO_REPL(conn, server)
 				}
 				i += 4
 			default:
@@ -141,7 +161,7 @@ func parseFields(input []byte) []string {
 	return fields[:len(fields)-1]
 }
 
-func handleConnection(conn net.Conn) error {
+func handleConnection(conn net.Conn, server *Server) error {
 	defer func() error {
 		err := conn.Close()
 		if err != nil {
@@ -157,29 +177,28 @@ func handleConnection(conn net.Conn) error {
 			return err
 		}
 		requestTime := time.Now()
-		handleRequest(conn, parseFields(input), requestTime)
+		handleRequest(conn, parseFields(input), requestTime, server)
 		input = make([]byte, 1024)
 		_, err = conn.Read(input)
 	}
 	return nil
 }
 
-func connect(l net.Listener) error {
+func connect(l net.Listener, server *Server) error {
 	for {
 		conn, err := l.Accept()
 		if err != nil {
 			fmt.Println("Error accepting connection: ", err.Error())
 			return err
 		}
-		go handleConnection(conn)
+		go handleConnection(conn, server)
 	}
 }
 
-func startServer(port int) error {
-
-	l, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(port))
+func (s *Server) startServer() error {
+	l, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(s.port))
 	if err != nil {
-		fmt.Println("Failed to bind to port", strconv.Itoa(port))
+		fmt.Println("Failed to bind to port", strconv.Itoa(s.port))
 		return err
 	}
 	defer func() error {
@@ -189,7 +208,7 @@ func startServer(port int) error {
 		}
 		return err
 	}()
-	return connect(l)
+	return connect(l, s)
 }
 
 func parseArgs() map[string]string {
@@ -205,11 +224,24 @@ func parseArgs() map[string]string {
 				args[arg] = os.Args[i+1]
 			}
 			i += 2
+		case "--replicaof":
+			if i+1 < len(os.Args) {
+				args[arg] = os.Args[i+1]
+			}
+			i += 2
 		default:
 			fmt.Println("Error: unknown command line parameter")
 		}
 	}
 	return args
+}
+
+func newServer(port int, isMaster bool) *Server {
+	return &Server{port,
+		make(map[string]string),
+		make(map[string]time.Time),
+		make(map[string]bool),
+		isMaster}
 }
 
 func main() {
@@ -218,7 +250,16 @@ func main() {
 	if args["--port"] == "" {
 		port = 6379
 	}
-	if startServer(port) != nil {
+	var server *Server
+	if master := args["--replicaof"]; master != "" { // server is slave
+		// masterHost := strings.Split(master, " ")
+		// masterPort := strings.Split(master, " ")[1]
+		server = newServer(port, false)
+
+	} else { // server is master
+		server = newServer(port, true)
+	}
+	if server.startServer() != nil {
 		os.Exit(1)
 	}
 }
