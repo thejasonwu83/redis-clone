@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -16,6 +17,8 @@ const (
 )
 
 var db = make(map[string]string)
+var expiry = make(map[string]time.Time)
+var hasExpiry = make(map[string]bool)
 
 func PING(conn net.Conn) {
 	_, err := conn.Write([]byte("+PONG\r\n"))
@@ -34,31 +37,51 @@ func ECHO(conn net.Conn, argLen int, arg string) {
 
 func SET(conn net.Conn, key, value string) {
 	db[key] = value
+	hasExpiry[key] = false
 	_, err := conn.Write([]byte("+OK\r\n"))
 	if err != nil {
 		fmt.Println("Error writing to connection: ", err.Error())
 	}
 }
 
-func GET(conn net.Conn, key string) {
-	value := db[key]
-	output := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
-	_, err := conn.Write([]byte(output))
+func SETPX(conn net.Conn, key, value string, ms int, requestTime time.Time) {
+	db[key] = value
+	hasExpiry[key] = true
+	expireTime := requestTime.Add(time.Duration(ms * int(time.Millisecond)))
+	expiry[key] = expireTime
+	_, err := conn.Write([]byte("+OK\r\n"))
 	if err != nil {
 		fmt.Println("Error writing to connection: ", err.Error())
 	}
 }
 
+// what happens after expiration? delete?
+func GET(conn net.Conn, key string, requestTime time.Time) {
+	if hasExpiry[key] && time.Now().Compare(expiry[key]) > 0 {
+		_, err := conn.Write([]byte("$-1\r\n"))
+		if err != nil {
+			fmt.Println("Error writing to connection: ", err.Error())
+		}
+	} else {
+		value := db[key]
+		output := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
+		_, err := conn.Write([]byte(output))
+		if err != nil {
+			fmt.Println("Error writing to connection: ", err.Error())
+		}
+	}
+}
+
 // refactor this ugly piece of shit function for the love of god
 // add error handling for faulty inputs (e.g. index out of bounds)
-func handleRequest(conn net.Conn, fields []string) error {
+func handleRequest(conn net.Conn, fields []string, requestTime time.Time) error {
 	fmt.Println("Input:", fields) // debug
 	for i := 0; i < len(fields); {
 		field := fields[i]
 		switch rune(field[0]) /* first byte */ {
 		case ARRAY:
 			numElem, _ := strconv.Atoi(field[1:])
-			if err := handleRequest(conn, fields[i+1:2*numElem+i+1]); err != nil {
+			if err := handleRequest(conn, fields[i+1:2*numElem+i+1], requestTime); err != nil {
 				fmt.Println("Error parsing client request:", err.Error())
 				return err
 			}
@@ -76,14 +99,20 @@ func handleRequest(conn net.Conn, fields []string) error {
 			case "SET":
 				key := fields[i+3]
 				value := fields[i+5]
-				SET(conn, key, value)
-				i += 6
+				if i+7 < len(fields) && strings.ToUpper(fields[i+7]) == "PX" {
+					time, _ := strconv.Atoi(fields[i+9])
+					SETPX(conn, key, value, time, requestTime)
+					i += 10
+				} else {
+					SET(conn, key, value)
+					i += 6
+				}
 			case "GET":
 				key := fields[i+3]
-				GET(conn, key)
+				GET(conn, key, requestTime)
 				i += 4
 			default:
-				fmt.Println("Error parsing client request: command not found or supported")
+				fmt.Println("Error parsing client request:", strings.ToUpper(fields[i+1]), "not found or supported")
 				return errors.New("command not found or supported")
 			}
 		default:
@@ -114,7 +143,8 @@ func handleConnection(conn net.Conn) error {
 			fmt.Println("Error reading from connection: ", err.Error())
 			return err
 		}
-		handleRequest(conn, parseFields(input))
+		requestTime := time.Now()
+		handleRequest(conn, parseFields(input), requestTime)
 		input = make([]byte, 1024)
 		_, err = conn.Read(input)
 	}
