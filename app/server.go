@@ -20,6 +20,13 @@ var db = make(map[string]string)
 var expiry = make(map[string]time.Time)
 var hasExpiry = make(map[string]bool)
 
+func INFO_REPL(conn net.Conn) {
+	_, err := conn.Write([]byte("$11\r\nrole:master\r\n"))
+	if err != nil {
+		fmt.Println("Error writing to connection: ", err.Error())
+	}
+}
+
 func PING(conn net.Conn) {
 	_, err := conn.Write([]byte("+PONG\r\n"))
 	if err != nil {
@@ -110,6 +117,12 @@ func handleRequest(conn net.Conn, fields []string, requestTime time.Time) error 
 			case "GET":
 				key := fields[i+3]
 				GET(conn, key, requestTime)
+				i += 4
+			case "INFO":
+				infoType := fields[i+3]
+				if strings.ToLower(infoType) == "replication" {
+					INFO_REPL(conn)
+				}
 				i += 4
 			default:
 				fmt.Println("Error parsing client request:", strings.ToUpper(fields[i+1]), "not found or supported")
