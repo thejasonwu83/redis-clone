@@ -25,6 +25,12 @@ type Server struct {
 	master    *Server
 }
 
+func sendOK(conn net.Conn) {
+	if _, err := conn.Write([]byte("+OK\r\n")); err != nil {
+		fmt.Println("Error writing OK to port:", err.Error())
+	}
+}
+
 func pingMaster(conn net.Conn) {
 	_, err := conn.Write([]byte("*1\r\n$4\r\nPING\r\n"))
 	if err != nil {
@@ -220,6 +226,9 @@ func handleRequest(conn net.Conn, fields []string, requestTime time.Time, server
 					INFO_REPL(conn, server)
 				}
 				i += 4
+			case "REPLCONF":
+				sendOK(conn)
+				i += 6
 			default:
 				fmt.Println("Error parsing client request:", strings.ToUpper(fields[i+1]), "not found or supported")
 				return errors.New("command not found or supported")
