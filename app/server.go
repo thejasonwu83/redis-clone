@@ -30,6 +30,43 @@ func pingMaster(conn net.Conn) {
 	if err != nil {
 		fmt.Println("Error pinging master:", err.Error())
 	}
+	input := make([]byte, 1024)
+	_, err = conn.Read(input)
+	if err != nil {
+		fmt.Println("Error reading input from master:", err.Error())
+	}
+	if string(input) != "+PONG\r\n" {
+		fmt.Println("Error receiving PONG from master: got", string(input))
+	}
+}
+
+func (s *Server) REPLCONF(conn net.Conn) {
+	port := strings.Split(s.port, ":")[1]
+	output := fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$4\r\n%s\r\n", port)
+	_, err := conn.Write([]byte(output))
+	if err != nil {
+		fmt.Println("Error sending REPLCONF to master:", err.Error())
+	}
+	input := make([]byte, 1024)
+	_, err = conn.Read(input)
+	if err != nil {
+		fmt.Println("Error receiving response from master:", err.Error())
+	}
+	if string(input) != "+OK\r\n" {
+		fmt.Println("Error receiving OK response from master: got", string(input))
+	}
+	_, err = conn.Write([]byte("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"))
+	if err != nil {
+		fmt.Println("Error sending REPLCONF to master:", err.Error())
+	}
+	input = make([]byte, 1024)
+	_, err = conn.Read(input)
+	if err != nil {
+		fmt.Println("Error receiving response from master:", err.Error())
+	}
+	if string(input) != "+OK\r\n" {
+		fmt.Println("Error receiving OK response from master: got", string(input))
+	}
 }
 
 func (s *Server) handshake() error {
@@ -42,6 +79,7 @@ func (s *Server) handshake() error {
 		return err
 	}
 	pingMaster(conn)
+	s.REPLCONF(conn)
 	return nil
 }
 
@@ -63,11 +101,11 @@ func INFO_REPL(conn net.Conn, server *Server) {
 	info := make(map[string]string)
 	if server.isMaster {
 		info["role"] = "master"
+		info["master_replid"] = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb" // pseudorandom: i chose it randomly
+		info["master_repl_offset"] = "0"
 	} else {
 		info["role"] = "slave"
 	}
-	info["master_replid"] = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb" // pseudorandom: i chose it randomly
-	info["master_repl_offset"] = "0"
 	writeFields(conn, info)
 }
 
