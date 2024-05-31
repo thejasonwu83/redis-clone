@@ -14,6 +14,8 @@ import (
 const (
 	ARRAY       = '*'
 	BULK_STRING = '$'
+	REPL_ID     = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+	REPL_OFFSET = "0"
 )
 
 type Server struct {
@@ -121,8 +123,8 @@ func INFO_REPL(conn net.Conn, server *Server) {
 	info := make(map[string]string)
 	if server.isMaster {
 		info["role"] = "master"
-		info["master_replid"] = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb" // pseudorandom: i chose it randomly
-		info["master_repl_offset"] = "0"
+		info["master_replid"] = REPL_ID
+		info["master_repl_offset"] = REPL_OFFSET
 	} else {
 		info["role"] = "slave"
 	}
@@ -228,7 +230,15 @@ func handleRequest(conn net.Conn, fields []string, requestTime time.Time, server
 				i += 4
 			case "REPLCONF":
 				sendOK(conn)
-				i += 6
+				if fields[i+3] == "listening-port" {
+					i += 6
+				} else {
+					i += 10
+				}
+			case "PSYNC":
+				if _, err := conn.Write([]byte(fmt.Sprintf("+FULLRESYNC %s %s\r\n", REPL_ID, REPL_OFFSET))); err != nil {
+					fmt.Println("Error sending response to PSYNC request:", err.Error())
+				}
 			default:
 				fmt.Println("Error parsing client request:", strings.ToUpper(fields[i+1]), "not found or supported")
 				return errors.New("command not found or supported")
