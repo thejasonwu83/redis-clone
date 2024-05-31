@@ -29,8 +29,10 @@ func writeFields(conn net.Conn, fields map[string]string) {
 	var output string
 	for key, val := range fields {
 		body := key + ":" + val
-		output += fmt.Sprintf("$%d\r\n%s\r\n", len(body), body)
+		output += fmt.Sprintf("%s\n", body)
 	}
+	output = output[:len(output)-1]
+	output = "$" + strconv.Itoa(len(output)) + "\r\n" + output + "\r\n"
 	_, err := conn.Write([]byte(output))
 	if err != nil {
 		fmt.Println("Error writing to connection: ", err.Error())
@@ -44,6 +46,8 @@ func INFO_REPL(conn net.Conn, server *Server) {
 	} else {
 		info["role"] = "slave"
 	}
+	info["master_replid"] = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb" // pseudorandom: i chose it randomly
+	info["master_repl_offset"] = "0"
 	writeFields(conn, info)
 }
 
