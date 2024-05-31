@@ -27,6 +27,24 @@ type Server struct {
 	hasExpiry map[string]bool
 	isMaster  bool
 	master    *Server
+	slaves    []net.Conn
+	prop      []string
+}
+
+func (s *Server) propagate() error {
+	if !s.isMaster {
+		fmt.Println("Error propagating command: server is a master to no slave")
+	}
+	for _, conn := range s.slaves {
+		for _, command := range s.prop {
+			if _, err := conn.Write([]byte(command)); err != nil {
+				fmt.Println("Error propagating command to slave:", err.Error())
+				return err
+			}
+		}
+	}
+	s.prop = nil
+	return nil
 }
 
 func sendOK(conn net.Conn) {
@@ -222,6 +240,7 @@ func handleRequest(conn net.Conn, fields []string, requestTime time.Time, server
 			case "SET":
 				key := fields[i+3]
 				value := fields[i+5]
+				server.prop = append(server.prop, fmt.Sprintf("*3\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(value), value))
 				if i+7 < len(fields) && strings.ToUpper(fields[i+7]) == "PX" {
 					time, _ := strconv.Atoi(fields[i+9])
 					SETPX(conn, key, value, time, requestTime, server)
@@ -230,6 +249,7 @@ func handleRequest(conn net.Conn, fields []string, requestTime time.Time, server
 					SET(conn, key, value, server)
 					i += 6
 				}
+				server.propagate()
 			case "GET":
 				key := fields[i+3]
 				GET(conn, key, requestTime, server)
@@ -243,6 +263,7 @@ func handleRequest(conn net.Conn, fields []string, requestTime time.Time, server
 			case "REPLCONF":
 				sendOK(conn)
 				if fields[i+3] == "listening-port" {
+					server.slaves = append(server.slaves, conn)
 					i += 6
 				} else {
 					i += 10
@@ -348,12 +369,16 @@ func parseArgs() map[string]string {
 }
 
 func newServer(port string, isMaster bool, master *Server) *Server {
-	return &Server{port,
+	return &Server{
+		port,
 		make(map[string]string),
 		make(map[string]time.Time),
 		make(map[string]bool),
 		isMaster,
-		master}
+		master,
+		[]net.Conn{},
+		[]string{},
+	}
 }
 
 func main() {
