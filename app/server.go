@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ const (
 	BULK_STRING = '$'
 	REPL_ID     = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
 	REPL_OFFSET = "0"
+	EMPTY_RDB   = "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog=="
 )
 
 type Server struct {
@@ -183,6 +185,16 @@ func GET(conn net.Conn, key string, requestTime time.Time, server *Server) {
 	}
 }
 
+func respondPSYNC(conn net.Conn) {
+	if _, err := conn.Write([]byte(fmt.Sprintf("+FULLRESYNC %s %s\r\n", REPL_ID, REPL_OFFSET))); err != nil {
+		fmt.Println("Error sending response to PSYNC request:", err.Error())
+	}
+	RDB, _ := base64.StdEncoding.DecodeString(EMPTY_RDB)
+	if _, err := conn.Write([]byte(fmt.Sprintf("$%d\r\n%s", len(RDB), RDB))); err != nil {
+		fmt.Println("Error sending RDB file to slave:", err.Error())
+	}
+}
+
 // refactor this ugly piece of shit function for the love of god
 // add error handling for faulty inputs (e.g. index out of bounds)
 func handleRequest(conn net.Conn, fields []string, requestTime time.Time, server *Server) error {
@@ -236,9 +248,8 @@ func handleRequest(conn net.Conn, fields []string, requestTime time.Time, server
 					i += 10
 				}
 			case "PSYNC":
-				if _, err := conn.Write([]byte(fmt.Sprintf("+FULLRESYNC %s %s\r\n", REPL_ID, REPL_OFFSET))); err != nil {
-					fmt.Println("Error sending response to PSYNC request:", err.Error())
-				}
+				respondPSYNC(conn)
+				i += 6
 			default:
 				fmt.Println("Error parsing client request:", strings.ToUpper(fields[i+1]), "not found or supported")
 				return errors.New("command not found or supported")
