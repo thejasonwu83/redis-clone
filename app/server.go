@@ -35,7 +35,7 @@ func pingMaster(conn net.Conn) {
 	if err != nil {
 		fmt.Println("Error reading input from master:", err.Error())
 	}
-	if string(input) != "+PONG\r\n" {
+	if string(input) != "+PONG" {
 		fmt.Println("Error receiving PONG from master: got", string(input))
 	}
 }
@@ -52,7 +52,7 @@ func (s *Server) REPLCONF(conn net.Conn) {
 	if err != nil {
 		fmt.Println("Error receiving response from master:", err.Error())
 	}
-	if string(input) != "+OK\r\n" {
+	if string(input) != "+OK" {
 		fmt.Println("Error receiving OK response from master: got", string(input))
 	}
 	_, err = conn.Write([]byte("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"))
@@ -64,9 +64,22 @@ func (s *Server) REPLCONF(conn net.Conn) {
 	if err != nil {
 		fmt.Println("Error receiving response from master:", err.Error())
 	}
-	if string(input) != "+OK\r\n" {
+	if string(input) != "+OK" {
 		fmt.Println("Error receiving OK response from master: got", string(input))
 	}
+}
+
+func PSYNC(conn net.Conn) {
+	_, err := conn.Write([]byte("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"))
+	if err != nil {
+		fmt.Println("Error sending PSYNC to master:", err.Error())
+	}
+	input := make([]byte, 1024)
+	_, err = conn.Read(input)
+	if err != nil {
+		fmt.Println("Error reading PSYNC response from master:", err.Error())
+	}
+	// TODO: parse master ID
 }
 
 func (s *Server) handshake() error {
@@ -80,6 +93,7 @@ func (s *Server) handshake() error {
 	}
 	pingMaster(conn)
 	s.REPLCONF(conn)
+	PSYNC(conn)
 	return nil
 }
 
