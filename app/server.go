@@ -34,6 +34,7 @@ type Server struct {
 func (s *Server) propagate() error {
 	if !s.isMaster {
 		fmt.Println("Error propagating command: server is a master to no slave")
+		return errors.New("server is a replica")
 	}
 	for _, conn := range s.slaves {
 		for _, command := range s.prop {
@@ -41,6 +42,7 @@ func (s *Server) propagate() error {
 				fmt.Println("Error propagating command to slave:", err.Error())
 				return err
 			}
+			fmt.Println("Propagated", command, "to slave") // debug
 		}
 	}
 	s.prop = nil
@@ -97,7 +99,7 @@ func (s *Server) REPLCONF(conn net.Conn) {
 	}
 }
 
-func PSYNC(conn net.Conn) {
+func PSYNC(conn net.Conn, s *Server) {
 	_, err := conn.Write([]byte("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"))
 	if err != nil {
 		fmt.Println("Error sending PSYNC to master:", err.Error())
@@ -107,7 +109,11 @@ func PSYNC(conn net.Conn) {
 	if err != nil {
 		fmt.Println("Error reading PSYNC response from master:", err.Error())
 	}
-	// TODO: parse master ID
+	// TODO: parse master ID?
+	if _, err = conn.Read(input); err != nil {
+		fmt.Println("Error reading RDB file from master:", err.Error())
+	}
+	go handleConnection(conn, s)
 }
 
 func (s *Server) handshake() error {
@@ -121,7 +127,7 @@ func (s *Server) handshake() error {
 	}
 	pingMaster(conn)
 	s.REPLCONF(conn)
-	PSYNC(conn)
+	PSYNC(conn, s)
 	return nil
 }
 
