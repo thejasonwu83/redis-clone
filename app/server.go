@@ -17,12 +17,32 @@ const (
 )
 
 type Server struct {
-	port      int
+	port      string
 	db        map[string]string
 	expiry    map[string]time.Time
 	hasExpiry map[string]bool
 	isMaster  bool
-	// master    *Server
+	master    *Server
+}
+
+func pingMaster(conn net.Conn) {
+	_, err := conn.Write([]byte("*1\r\n$4\r\nPING\r\n"))
+	if err != nil {
+		fmt.Println("Error pinging master:", err.Error())
+	}
+}
+
+func (s *Server) handshake() error {
+	if s.isMaster {
+		return errors.New("server is a slave to no master")
+	}
+	conn, err := net.Dial("tcp", s.master.port)
+	if err != nil {
+		fmt.Println("Error dialing master's port:", err.Error())
+		return err
+	}
+	pingMaster(conn)
+	return nil
 }
 
 func writeFields(conn net.Conn, fields map[string]string) {
@@ -200,9 +220,9 @@ func connect(l net.Listener, server *Server) error {
 }
 
 func (s *Server) startServer() error {
-	l, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(s.port))
+	l, err := net.Listen("tcp", s.port)
 	if err != nil {
-		fmt.Println("Failed to bind to port", strconv.Itoa(s.port))
+		fmt.Println("Failed to bind to port", s.port)
 		return err
 	}
 	defer func() error {
@@ -212,6 +232,11 @@ func (s *Server) startServer() error {
 		}
 		return err
 	}()
+	if !s.isMaster {
+		if err = s.handshake(); err != nil {
+			fmt.Println("Error establishing handshake with master:", err.Error())
+		}
+	}
 	return connect(l, s)
 }
 
@@ -240,28 +265,31 @@ func parseArgs() map[string]string {
 	return args
 }
 
-func newServer(port int, isMaster bool) *Server {
+func newServer(port string, isMaster bool, master *Server) *Server {
 	return &Server{port,
 		make(map[string]string),
 		make(map[string]time.Time),
 		make(map[string]bool),
-		isMaster}
+		isMaster,
+		master}
 }
 
 func main() {
 	args := parseArgs()
-	port, _ := strconv.Atoi(args["--port"])
+	port := "0.0.0.0:" + args["--port"]
 	if args["--port"] == "" {
-		port = 6379
+		port = "0.0.0.0:6379"
 	}
 	var server *Server
-	if master := args["--replicaof"]; master != "" { // server is slave
-		// masterHost := strings.Split(master, " ")
-		// masterPort := strings.Split(master, " ")[1]
-		server = newServer(port, false)
-
+	if masterPort := args["--replicaof"]; masterPort != "" { // server is slave
+		masterHost := strings.Split(masterPort, " ")[0]
+		if masterHost == "localhost" {
+			masterPort = "0.0.0.0:" + strings.Split(masterPort, " ")[1]
+		}
+		master := newServer(masterPort, true, nil)
+		server = newServer(port, false, master)
 	} else { // server is master
-		server = newServer(port, true)
+		server = newServer(port, true, nil)
 	}
 	if server.startServer() != nil {
 		os.Exit(1)
