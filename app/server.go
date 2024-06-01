@@ -38,11 +38,12 @@ func (s *Server) propagate() error {
 	}
 	for _, conn := range s.slaves {
 		for _, command := range s.prop {
+			fmt.Println("Propagating to replica:", command)
 			if _, err := conn.Write([]byte(command)); err != nil {
 				fmt.Println("Error propagating command to slave:", err.Error())
 				return err
 			}
-			fmt.Println("Propagated", command, "to slave") // debug
+			conn.Read([]byte{})
 		}
 	}
 	s.prop = nil
@@ -65,9 +66,6 @@ func pingMaster(conn net.Conn) {
 	if err != nil {
 		fmt.Println("Error reading input from master:", err.Error())
 	}
-	if string(input) != "+PONG" {
-		fmt.Println("Error receiving PONG from master: got", string(input))
-	}
 }
 
 func (s *Server) REPLCONF(conn net.Conn) {
@@ -82,9 +80,6 @@ func (s *Server) REPLCONF(conn net.Conn) {
 	if err != nil {
 		fmt.Println("Error receiving response from master:", err.Error())
 	}
-	if string(input) != "+OK" {
-		fmt.Println("Error receiving OK response from master: got", string(input))
-	}
 	_, err = conn.Write([]byte("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"))
 	if err != nil {
 		fmt.Println("Error sending REPLCONF to master:", err.Error())
@@ -93,9 +88,6 @@ func (s *Server) REPLCONF(conn net.Conn) {
 	_, err = conn.Read(input)
 	if err != nil {
 		fmt.Println("Error receiving response from master:", err.Error())
-	}
-	if string(input) != "+OK" {
-		fmt.Println("Error receiving OK response from master: got", string(input))
 	}
 }
 
@@ -113,6 +105,7 @@ func PSYNC(conn net.Conn, s *Server) {
 	if _, err = conn.Read(input); err != nil {
 		fmt.Println("Error reading RDB file from master:", err.Error())
 	}
+	fmt.Println("Secured handshake with master, RDB received: ready for propagation")
 	go handleConnection(conn, s)
 }
 
@@ -222,7 +215,6 @@ func respondPSYNC(conn net.Conn) {
 // refactor this ugly piece of shit function for the love of god
 // add error handling for faulty inputs (e.g. index out of bounds)
 func handleRequest(conn net.Conn, fields []string, requestTime time.Time, server *Server) error {
-	fmt.Println("Input:", fields) // debug
 	for i := 0; i < len(fields); {
 		field := fields[i]
 		switch rune(field[0]) /* first byte */ {
@@ -270,6 +262,7 @@ func handleRequest(conn net.Conn, fields []string, requestTime time.Time, server
 				sendOK(conn)
 				if fields[i+3] == "listening-port" {
 					server.slaves = append(server.slaves, conn)
+					fmt.Println("Replica connected from port", fields[i+5])
 					i += 6
 				} else {
 					i += 10
